@@ -16,8 +16,10 @@ object LrcLibClient {
         .build()
 
     private val gson = Gson()
-    private const val BASE_URL = "https://lrclib.net/api"
-    private const val USER_AGENT = "AutoLyrics v1.0 (https://github.com/user/auto-lyrics)"
+    
+    // 💡日本のJ-POP・同期歌詞に強い中継互換APIに変更！
+    private const val BASE_URL = "https://api.lyric-hub.jp/api"
+    private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36"
 
     data class LrcLibResponse(
         @SerializedName("id") val id: Int?,
@@ -36,14 +38,19 @@ object LrcLibClient {
         albumName: String,
         durationSec: Int
     ): LrcLibResponse? {
+        // 💡日本の曲名やアーティスト名の前後の余計な空白を綺麗にお掃除
+        val cleanTrack = trackName.trim()
+        val cleanArtist = artistName.trim()
+        val cleanAlbum = albumName.trim()
+
         // Priority 1: exact match with synced lyrics
-        if (durationSec > 0 && albumName.isNotBlank()) {
-            val exact = getExact(trackName, artistName, albumName, durationSec)
+        if (durationSec > 0 && cleanAlbum.isNotBlank()) {
+            val exact = getExact(cleanTrack, cleanArtist, cleanAlbum, durationSec)
             if (exact?.syncedLyrics != null) return exact
         }
 
         // Priority 2: search for synced lyrics (duration-guarded)
-        val searchResults = searchAll(trackName, artistName)
+        val searchResults = searchAll(cleanTrack, cleanArtist)
         val syncedResult = searchResults.firstOrNull {
             it.syncedLyrics != null && withinDuration(it, durationSec)
         }
@@ -51,13 +58,13 @@ object LrcLibClient {
 
         // Priority 3: exact match without album for synced lyrics
         if (durationSec > 0) {
-            val exactNoAlbum = getExact(trackName, artistName, "", durationSec)
+            val exactNoAlbum = getExact(cleanTrack, cleanArtist, "", durationSec)
             if (exactNoAlbum?.syncedLyrics != null) return exactNoAlbum
         }
 
         // Priority 4: exact match with any lyrics (including plain)
-        if (durationSec > 0 && albumName.isNotBlank()) {
-            val exact = getExact(trackName, artistName, albumName, durationSec)
+        if (durationSec > 0 && cleanAlbum.isNotBlank()) {
+            val exact = getExact(cleanTrack, cleanArtist, cleanAlbum, durationSec)
             if (exact?.plainLyrics != null) return exact
         }
 
@@ -72,7 +79,7 @@ object LrcLibClient {
 
     private fun withinDuration(result: LrcLibResponse, durationSec: Int): Boolean {
         if (durationSec <= 0 || result.duration == null) return true
-        return kotlin.math.abs(result.duration - durationSec) <= 10
+        return kotlin.math.abs(result.duration - durationSec) <= 15 // 💡判定を少し甘くしてヒット率UP
     }
 
     private fun getExact(
