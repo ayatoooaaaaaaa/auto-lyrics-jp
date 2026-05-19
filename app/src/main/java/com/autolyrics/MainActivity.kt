@@ -396,8 +396,16 @@ class MainActivity : AppCompatActivity() {
                         text = "${track.trackName} - ${track.artistName}$hasSynced"
                         isAllCaps = false
                         setOnClickListener {
-                            // タップされた曲の歌詞をMediaTrackerに適用して画面に反映させる
-                            mediaTracker.applyManualTrack(track)
+                            // MediaTrackerを介さず、このActivityのスコープ内で直接Service経由、または通知インテントを飛ばして歌詞を更新する
+                            val intent = Intent("com.autolyrics.ACTION_MANUAL_LYRICS").apply {
+                                setPackage(packageName)
+                                putExtra("track_id", track.id)
+                                putExtra("track_name", track.trackName)
+                                putExtra("artist_name", track.artistName)
+                                putExtra("synced_lyrics", track.syncedLyrics)
+                                putExtra("plain_lyrics", track.plainLyrics)
+                            }
+                            sendBroadcast(intent)
                             layoutSearchPanel.visibility = View.GONE
                         }
                     }
