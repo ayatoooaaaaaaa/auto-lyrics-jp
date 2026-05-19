@@ -16,6 +16,7 @@ import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.annotation.SuppressLint
 import android.content.SharedPreferences
+import android.text.Layout
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -78,11 +79,10 @@ class MainActivity : AppCompatActivity() {
     private var plainScrollAnimator: ValueAnimator? = null
     private var lastPlainTrackTitle: String? = null
     
-    // 手動モード管理用の変数
     private var isManualMode = false
     private var manualTrackTitle = ""
     private var manualArtistName = ""
-    private var manualLines = listOf<Pair<Long, String>>() // タイムスタンプ(ms) と 歌詞本文 のペア
+    private var manualLines = listOf<Pair<Long, String>>()
     private var lastManualIndex = -1
 
     private val fontButtons = mutableMapOf<String, Button>()
@@ -123,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         btnJumpToCurrent = findViewById(R.id.btn_jump_to_current)
 
         setupScrollDetection()
+        setupLyricsTapListener()
 
         btnPermission.setOnClickListener {
             startActivity(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
@@ -213,7 +214,7 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.btn_aa_delay_reset).setOnClickListener {
             aaOffsetMs = 0L
-            prefs.edit().putLong("aa_offset_ms", 0L).apply()
+            prefs.edit().putLong("aa_offset_ms", aaOffsetMs).apply()
             updateAaDelayDisplay()
         }
 
@@ -226,7 +227,6 @@ class MainActivity : AppCompatActivity() {
                     updateAlbumArt(state)
                     applyThemeColors(state.albumColors)
 
-                    // 手動検索時は、選択した曲の情報を優先表示
                     if (isManualMode) {
                         tvTrack.text = "$manualTrackTitle\n$manualArtistName"
                         tvTrack.visibility = View.VISIBLE
@@ -252,7 +252,6 @@ class MainActivity : AppCompatActivity() {
                         tvSource.visibility = View.GONE
                     }
 
-                    // 手動モードの場合は、現在の再生時間を用いて自前で歌詞同期レンダリングを行う
                     if (isManualMode) {
                         stopPlainScroll()
                         val currentPos = try {
@@ -426,14 +425,12 @@ class MainActivity : AppCompatActivity() {
                         isAllCaps = false
                         setOnClickListener {
                             isManualMode = true
-                            // ここでエルビス演算子を使い、String? から安全な String 型に変換
                             manualTrackTitle = track.trackName ?: "Unknown Track"
                             manualArtistName = track.artistName ?: "Unknown Artist"
                             lastManualIndex = -1
                             lastScrolledIndex = -1
                             
                             val rawText = track.syncedLyrics ?: track.plainLyrics ?: ""
-                            
                             val parsedList = mutableListOf<Pair<Long, String>>()
                             val timeRegex = Regex("\\[(\\d+):(\\d+)\\.(\\d+)\\]")
                             
@@ -454,7 +451,6 @@ class MainActivity : AppCompatActivity() {
                             }
                             
                             manualLines = parsedList.sortedBy { it.first }
-                            
                             layoutSearchPanel.visibility = View.GONE
                         }
                     }
@@ -463,7 +459,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    // 手動検索モード専用のタイムスタンプ同期表示処理
     private fun renderManualSyncedLyrics(currentPosMs: Long, colors: AlbumColors?) {
         if (manualLines.isEmpty()) {
             tvLyrics.text = "No lyrics text available."
@@ -511,6 +506,40 @@ class MainActivity : AppCompatActivity() {
             if (!userScrolling) {
                 autoScrollToCurrentLine(currentIndex, manualLines.size)
             }
+        }
+    }
+
+    // 歌詞をタップした行へ再生時間をシーク(反映)させる設定
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupLyricsTapListener() {
+        tvLyrics.setOnTouchListener { v, event ->
+            if (event.action == MotionEvent.ACTION_UP) {
+                val layout = (v as TextView).layout
+                if (layout != null) {
+                    val x = event.x.toInt() - v.totalPaddingLeft + v.scrollX
+                    val y = event.y.toInt() - v.totalPaddingTop + v.scrollY
+                    val line = layout.getLineForVertical(y)
+                    
+                    val totalLines = if (isManualMode) manualLines.size else mediaTracker.state.value.lines.size
+                    if (totalLines > 0) {
+                        val lineCount = layout.lineCount
+                        val linesPerLyricsLine = lineCount / totalLines
+                        if (linesPerLyricsLine > 0) {
+                            val clickedLyricsIndex = (line / linesPerLyricsLine).coerceIn(0, totalLines - 1)
+                            
+                            val targetMs = if (isManualMode) {
+                                manualLines.getOrNull(clickedLyricsIndex)?.first ?: 0L
+                            } else {
+                                mediaTracker.state.value.lines.getOrNull(clickedLyricsIndex)?.timeMs ?: 0L
+                            }
+                            
+                            // 曲の再生位置を強制変更（シーク処理を呼び出す）
+                            mediaTracker.seekTo(targetMs)
+                        }
+                    }
+                }
+            }
+            false
         }
     }
 
@@ -837,3 +866,4 @@ class MainActivity : AppCompatActivity() {
         private val DEFAULT_DIM = Color.parseColor("#888888")
     }
 }
+
