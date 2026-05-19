@@ -397,9 +397,10 @@ class MainActivity : AppCompatActivity() {
                         text = "${track.trackName} - ${track.artistName}$hasSynced"
                         isAllCaps = false
                         setOnClickListener {
-    mediaTracker.injectLyrics(track.syncedLyrics, track.plainLyrics, track.trackName, track.artistName)
+    // もしこれなら通るかも！
+    mediaTracker.setManualLyrics(track.syncedLyrics, track.plainLyrics, track.trackName, track.artistName)
     layoutSearchPanel.visibility = View.GONE
-}
+                    }
                     }
                     layoutSearchResults.addView(btnTrackOpt)
                 }
