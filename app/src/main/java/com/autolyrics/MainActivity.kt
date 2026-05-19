@@ -396,6 +396,8 @@ class MainActivity : AppCompatActivity() {
                         text = "${track.trackName} - ${track.artistName}$hasSynced"
                         isAllCaps = false
                         setOnClickListener {
+                            // タップされた曲の歌詞をMediaTrackerに適用して画面に反映させる
+                            mediaTracker.applyManualTrack(track)
                             layoutSearchPanel.visibility = View.GONE
                         }
                     }
