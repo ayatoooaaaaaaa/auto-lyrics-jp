@@ -84,7 +84,6 @@ class MainActivity : AppCompatActivity() {
         btnJumpToCurrent.visibility = View.GONE
     }
 
-    // 手動検索用UIの変数宣言
     private lateinit var layoutSearchPanel: LinearLayout
     private lateinit var etSearchQuery: EditText
     private lateinit var btnSearchSubmit: Button
@@ -211,7 +210,6 @@ class MainActivity : AppCompatActivity() {
             updateAaDelayDisplay()
         }
 
-        // 手動検索UIを画面にドッキングさせる
         setupSearchUi()
 
         lifecycleScope.launch {
@@ -482,8 +480,10 @@ class MainActivity : AppCompatActivity() {
             if (isCurrentLine) {
                 ssb.append("▶  ")
             } else {
-                ssb.append(
-                                if (isCurrentLine && hasKaraoke && line.words.isNotEmpty()) {
+                ssb.append("    ")
+            }
+
+            if (isCurrentLine && hasKaraoke && line.words.isNotEmpty()) {
                 line.words.forEachIndexed { wi, word ->
                     val wordStart = ssb.length
                     ssb.append(word.text)
@@ -712,4 +712,3 @@ class MainActivity : AppCompatActivity() {
         private val DEFAULT_DIM = Color.parseColor("#888888")
     }
 }
-
