@@ -207,7 +207,7 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.btn_aa_delay_reset).setOnClickListener {
             aaOffsetMs = 0L
-            prefs.edit().putLong("aa_offset_ms", aaOffsetMs).apply()
+            prefs.edit().putLong("aa_offset_ms", 0L).apply()
             updateAaDelayDisplay()
         }
 
@@ -216,7 +216,6 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 mediaTracker.state.collect { state ->
                     if (isManualMode) {
-                        // 手動選択モードの時は自動更新で画面が引き戻されるのを完全にブロックする
                         return@collect
                     }
                     
@@ -360,7 +359,6 @@ class MainActivity : AppCompatActivity() {
                 View.GONE else View.VISIBLE
                 
             if (layoutSearchPanel.visibility == View.VISIBLE) {
-                // 自動入力で文字がバグるのを完全に防止。空なら現在のトラック情報を1回だけ入れる
                 if (etSearchQuery.text.toString().isBlank()) {
                     val currentTrack = mediaTracker.state.value.track
                     if (currentTrack != null) {
@@ -405,32 +403,34 @@ class MainActivity : AppCompatActivity() {
                         text = "${track.trackName} - ${track.artistName}$hasSynced"
                         isAllCaps = false
                         setOnClickListener {
-                            // 手動ホールドモードをONにする
                             isManualMode = true
                             
-                            val textToParse = track.syncedLyrics ?: track.plainLyrics ?: ""
-                            val linesList = com.autolyrics.lyrics.LyricsParser.parse(textToParse)
-                            val isSyncedType = track.syncedLyrics != null
+                            val rawText = track.syncedLyrics ?: track.plainLyrics ?: ""
+                            
+                            // 外部のパース用クラスに依存せず、タイムタグ [00:00.00] をその場で綺麗に削ぎ落とす安全な処理
+                            val cleanedLines = rawText.lines().map { line ->
+                                val cleanedText = line.replace(Regex("\\[\\d+:\\d+\\.\\d+\\]"), "").trim()
+                                com.autolyrics.model.LyricsLine(
+                                    timeMs = 0L,
+                                    text = cleanedText,
+                                    words = emptyList()
+                                )
+                            }.filter { it.text.isNotBlank() }
                             
                             tvTrack.text = "${track.trackName}\n${track.artistName}"
                             tvTrack.visibility = View.VISIBLE
                             tvSource.text = "LRCLIB (Manual)"
                             tvSource.visibility = View.VISIBLE
                             
-                            val customState = mediaTracker.state.value.copy(
-                                status = if (isSyncedType) LyricsStatus.FOUND else LyricsStatus.PLAIN_ONLY,
-                                lines = linesList,
-                                currentIndex = if (isSyncedType) 0 else -1,
-                                currentWordIndex = -1
-                            )
+                            stopPlainScroll()
                             
-                            if (isSyncedType) {
-                                renderSyncedLyrics(customState)
-                            } else {
-                                stopPlainScroll()
-                                tvLyrics.text = track.plainLyrics ?: "No lyrics text available."
-                                startPlainScroll(customState)
+                            // 画面上のテキストビューに直接テキストを綺麗に流し込む
+                            val sb = SpannableStringBuilder()
+                            sb.append("ℹ  Manual Lyrics Mode\n\n─────────────────────\n\n")
+                            cleanedLines.forEach { line ->
+                                sb.append("${line.text}\n\n")
                             }
+                            tvLyrics.text = sb
                             
                             layoutSearchPanel.visibility = View.GONE
                         }
