@@ -211,7 +211,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupSearchUi()
-
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 mediaTracker.state.collect { state ->
@@ -305,7 +304,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupSearchUi() {
         val btnSearchToggle = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_search_category_default)
-            setBackgroundColor(Color.TRANSPARENT)
+            setBackgroundColor(Color.TRANSPARETransparent)
             setPadding(16, 16, 16, 16)
         }
         
@@ -397,17 +396,14 @@ class MainActivity : AppCompatActivity() {
                         text = "${track.trackName} - ${track.artistName}$hasSynced"
                         isAllCaps = false
                         setOnClickListener {
-    // もしこれなら通るかも！
-    mediaTracker.setManualLyrics(track.syncedLyrics, track.plainLyrics, track.trackName, track.artistName)
-    layoutSearchPanel.visibility = View.GONE
-                    }
+                            layoutSearchPanel.visibility = View.GONE
+                        }
                     }
                     layoutSearchResults.addView(btnTrackOpt)
                 }
             }
         }
     }
-
     private fun updateAlbumArt(state: LyricsState) {
         val art = state.albumArt
         if (art != null) {
@@ -713,3 +709,4 @@ class MainActivity : AppCompatActivity() {
         private val DEFAULT_DIM = Color.parseColor("#888888")
     }
 }
+
