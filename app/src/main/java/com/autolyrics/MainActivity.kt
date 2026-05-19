@@ -287,7 +287,7 @@ class MainActivity : AppCompatActivity() {
                                             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                                         )
                                         sb.setSpan(
-                                            ForegroundColorSpan(dimColor),
+                                            ForegroundColorSpan(dimColor.toInt()),
                                             tlStart, sb.length,
                                             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                                         )
@@ -482,5 +482,4 @@ class MainActivity : AppCompatActivity() {
             if (isCurrentLine) {
                 ssb.append("▶  ")
             } else {
-                ssb.append("    ")
-
+                ssb.append(
