@@ -34,35 +34,11 @@ object LrcLibClient {
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val bodyString = response.body?.string()
-                    val data = gson.fromJson(bodyString, LyricsResponse::class.java)
-                    if (data != null && (!data.syncedLyrics.isNullOrEmpty() || !data.plainLyrics.isNullOrEmpty())) {
-                        return data // 歌詞が見つかったら終了！
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace() // エラーが起きても次へ進む
-        }
-
-        // -----------------------------------------------------------------
-        // 【第2希望】バックアップの「Textyl」にアクセス（通信の仕組みをTextyl専用に調整）
-        // -----------------------------------------------------------------
-        try {
-            val queryText = "$artistName $trackName"
-            val url = "https://api.textyl.co/".toHttpUrl().newBuilder()
-                .addPathSegment("api")
-                .addPathSegment("lyrics")
-                .addQueryParameter("q", queryText) // Textyl専用の検索パラメーター
-                .build()
-
-            val request = Request.Builder().url(url).header("User-Agent", "AutoLyricsAndroid/1.0").build()
-
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val bodyString = response.body?.string()
-                    val data = gson.fromJson(bodyString, LyricsResponse::class.java)
-                    if (data != null && (!data.syncedLyrics.isNullOrEmpty() || !data.plainLyrics.isNullOrEmpty())) {
-                        return data // 見つかったら終了！
+                    if (!bodyString.isNullOrEmpty()) {
+                        val data = gson.fromJson(bodyString, LyricsResponse::class.java)
+                        if (data != null && (!data.syncedLyrics.isNullOrEmpty() || !data.plainLyrics.isNullOrEmpty())) {
+                            return data
+                        }
                     }
                 }
             }
@@ -70,7 +46,34 @@ object LrcLibClient {
             e.printStackTrace()
         }
 
-        // 両方全滅したときだけnullを返す
+        // -----------------------------------------------------------------
+        // 【第2希望】バックアップの「Textyl」にアクセス
+        // -----------------------------------------------------------------
+        try {
+            val queryText = "$artistName $trackName"
+            val url = "https://api.textyl.co/".toHttpUrl().newBuilder()
+                .addPathSegment("api")
+                .addPathSegment("lyrics")
+                .addQueryParameter("q", queryText)
+                .build()
+
+            val request = Request.Builder().url(url).header("User-Agent", "AutoLyricsAndroid/1.0").build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val bodyString = response.body?.string()
+                    if (!bodyString.isNullOrEmpty()) {
+                        val data = gson.fromJson(bodyString, LyricsResponse::class.java)
+                        if (data != null && (!data.syncedLyrics.isNullOrEmpty() || !data.plainLyrics.isNullOrEmpty())) {
+                            return data
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
         return null
     }
 }
