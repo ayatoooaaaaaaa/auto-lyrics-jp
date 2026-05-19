@@ -407,15 +407,10 @@ class MainActivity : AppCompatActivity() {
                             
                             val rawText = track.syncedLyrics ?: track.plainLyrics ?: ""
                             
-                            // 外部のパース用クラスに依存せず、タイムタグ [00:00.00] をその場で綺麗に削ぎ落とす安全な処理
+                            // 外部クラスを一切使わず、ただのStringのリストとしてタイムタグを除去する最強に安全な処理
                             val cleanedLines = rawText.lines().map { line ->
-                                val cleanedText = line.replace(Regex("\\[\\d+:\\d+\\.\\d+\\]"), "").trim()
-                                com.autolyrics.model.LyricsLine(
-                                    timeMs = 0L,
-                                    text = cleanedText,
-                                    words = emptyList()
-                                )
-                            }.filter { it.text.isNotBlank() }
+                                line.replace(Regex("\\[\\d+:\\d+\\.\\d+\\]"), "").trim()
+                            }.filter { it.isNotBlank() }
                             
                             tvTrack.text = "${track.trackName}\n${track.artistName}"
                             tvTrack.visibility = View.VISIBLE
@@ -424,11 +419,11 @@ class MainActivity : AppCompatActivity() {
                             
                             stopPlainScroll()
                             
-                            // 画面上のテキストビューに直接テキストを綺麗に流し込む
+                            // 画面のTextViewに直接テキストを流し込む
                             val sb = SpannableStringBuilder()
                             sb.append("ℹ  Manual Lyrics Mode\n\n─────────────────────\n\n")
-                            cleanedLines.forEach { line ->
-                                sb.append("${line.text}\n\n")
+                            cleanedLines.forEach { lineText ->
+                                sb.append("$lineText\n\n")
                             }
                             tvLyrics.text = sb
                             
