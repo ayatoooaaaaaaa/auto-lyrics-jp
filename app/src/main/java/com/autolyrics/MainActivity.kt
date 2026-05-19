@@ -255,7 +255,6 @@ class MainActivity : AppCompatActivity() {
                     // 手動モードの場合は、現在の再生時間を用いて自前で歌詞同期レンダリングを行う
                     if (isManualMode) {
                         stopPlainScroll()
-                        // プレイヤーの進捗状況を取得（なければ0）
                         val currentPos = try {
                             val prop = state.javaClass.getDeclaredField("currentPlaybackPositionMs")
                             prop.isAccessible = true
@@ -423,18 +422,18 @@ class MainActivity : AppCompatActivity() {
                 results.forEach { track ->
                     val hasSynced = if (track.syncedLyrics != null) " [Synced ✨]" else " [Plain]"
                     val btnTrackOpt = Button(this@MainActivity).apply {
-                        text = "${track.trackName} - ${track.artistName}$hasSynced"
+                        text = "${track.trackName ?: "Unknown Track"} - ${track.artistName ?: "Unknown Artist"}$hasSynced"
                         isAllCaps = false
                         setOnClickListener {
                             isManualMode = true
-                            manualTrackTitle = track.trackName
-                            manualArtistName = track.artistName
+                            // ここでエルビス演算子を使い、String? から安全な String 型に変換
+                            manualTrackTitle = track.trackName ?: "Unknown Track"
+                            manualArtistName = track.artistName ?: "Unknown Artist"
                             lastManualIndex = -1
                             lastScrolledIndex = -1
                             
                             val rawText = track.syncedLyrics ?: track.plainLyrics ?: ""
                             
-                            // この場でタイムスタンプ [mm:ss.F] をミリ秒(Long)に変換して、歌詞リストを構築するパース処理
                             val parsedList = mutableListOf<Pair<Long, String>>()
                             val timeRegex = Regex("\\[(\\d+):(\\d+)\\.(\\d+)\\]")
                             
@@ -454,7 +453,6 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                             
-                            // タイムスタンプ順に綺麗にソート
                             manualLines = parsedList.sortedBy { it.first }
                             
                             layoutSearchPanel.visibility = View.GONE
@@ -472,7 +470,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 現在の再生時間から、今何行目の歌詞であるかを判定
         var currentIndex = 0
         for (i in manualLines.indices) {
             if (currentPosMs >= manualLines[i].first) {
@@ -483,7 +480,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         val ssb = SpannableStringBuilder()
-        val highlightColor = colors?.vibrant ?: DEFAULT_HIGHLIGHT
         val dimColor = colors?.textDim ?: DEFAULT_DIM
 
         manualLines.forEachIndexed { i, pair ->
@@ -727,7 +723,6 @@ class MainActivity : AppCompatActivity() {
             btnJumpToCurrent.visibility = View.GONE
             
             val currentIdx = if (isManualMode) {
-                // 手動モードの場合は現在の再生時間から行数を逆算
                 val currentPos = try {
                     val prop = mediaTracker.state.value.javaClass.getDeclaredField("currentPlaybackPositionMs")
                     prop.isAccessible = true
