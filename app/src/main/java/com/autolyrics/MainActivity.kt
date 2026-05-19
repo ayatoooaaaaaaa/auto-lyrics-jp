@@ -77,7 +77,13 @@ class MainActivity : AppCompatActivity() {
 
     private var plainScrollAnimator: ValueAnimator? = null
     private var lastPlainTrackTitle: String? = null
+    
+    // 手動モード管理用の変数
     private var isManualMode = false
+    private var manualTrackTitle = ""
+    private var manualArtistName = ""
+    private var manualLines = listOf<Pair<Long, String>>() // タイムスタンプ(ms) と 歌詞本文 のペア
+    private var lastManualIndex = -1
 
     private val fontButtons = mutableMapOf<String, Button>()
     private val scrollResetRunnable = Runnable {
@@ -215,32 +221,50 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 mediaTracker.state.collect { state ->
-                    // 手動モードであっても、再生位置の同期処理（renderSyncedLyrics）へ流すためにブロックはしない
                     updatePermissionUi()
                     updateDelayDisplay(state.offsetMs)
                     updateAlbumArt(state)
                     applyThemeColors(state.albumColors)
 
-                    if (state.track != null) {
+                    // 手動検索時は、選択した曲の情報を優先表示
+                    if (isManualMode) {
+                        tvTrack.text = "$manualTrackTitle\n$manualArtistName"
+                        tvTrack.visibility = View.VISIBLE
+                        tvSource.text = "LRCLIB (Manual)"
+                        tvSource.visibility = View.VISIBLE
+                    } else if (state.track != null) {
                         val artistText = if (state.track.artist.isNotBlank())
                             state.track.artist else "Unknown Artist"
                         tvTrack.text = "${state.track.title}\n$artistText"
                         tvTrack.visibility = View.VISIBLE
-                    } else {
-                        if (!isManualMode) {
-                            tvTrack.text = ""
-                            tvTrack.visibility = View.GONE
+                        if (state.source.isNotBlank()) {
+                            val srcText = if (state.detectedLanguage != null) {
+                                "${state.source} · ${state.detectedLanguage}→en"
+                            } else state.source
+                            tvSource.text = srcText
+                            tvSource.visibility = View.VISIBLE
+                        } else {
+                            tvSource.visibility = View.GONE
                         }
+                    } else {
+                        tvTrack.text = ""
+                        tvTrack.visibility = View.GONE
+                        tvSource.visibility = View.GONE
                     }
 
-                    if (state.source.isNotBlank()) {
-                        val srcText = if (state.detectedLanguage != null) {
-                            "${state.source} · ${state.detectedLanguage}→en"
-                        } else state.source
-                        tvSource.text = srcText
-                        tvSource.visibility = View.VISIBLE
-                    } else {
-                        if (!isManualMode) tvSource.visibility = View.GONE
+                    // 手動モードの場合は、現在の再生時間を用いて自前で歌詞同期レンダリングを行う
+                    if (isManualMode) {
+                        stopPlainScroll()
+                        // プレイヤーの進捗状況を取得（なければ0）
+                        val currentPos = try {
+                            val prop = state.javaClass.getDeclaredField("currentPlaybackPositionMs")
+                            prop.isAccessible = true
+                            prop.get(state) as Long
+                        } catch (e: Exception) {
+                            0L
+                        }
+                        renderManualSyncedLyrics(currentPos, state.albumColors)
+                        return@collect
                     }
 
                     if (state.status != LyricsStatus.PLAIN_ONLY) {
@@ -254,16 +278,16 @@ class MainActivity : AppCompatActivity() {
 
                     when (state.status) {
                         LyricsStatus.NO_MEDIA -> {
-                            if (!isManualMode) tvLyrics.text = "Play a song to see lyrics here.\n\nLyrics will also appear on Android Auto."
+                            tvLyrics.text = "Play a song to see lyrics here.\n\nLyrics will also appear on Android Auto."
                         }
                         LyricsStatus.LOADING -> {
-                            if (!isManualMode) tvLyrics.text = "Loading lyrics…"
+                            tvLyrics.text = "Loading lyrics…"
                         }
                         LyricsStatus.NOT_FOUND -> {
-                            if (!isManualMode) tvLyrics.text = "No lyrics found for this track.\n\n💡 Try using the manual search button at the top!"
+                            tvLyrics.text = "No lyrics found for this track.\n\n💡 Try using the manual search button at the top!"
                         }
                         LyricsStatus.ERROR -> {
-                            if (!isManualMode) tvLyrics.text = "Error loading lyrics.\nCheck your internet connection."
+                            tvLyrics.text = "Error loading lyrics.\nCheck your internet connection."
                         }
                         LyricsStatus.FOUND -> {
                             renderSyncedLyrics(state)
@@ -403,23 +427,35 @@ class MainActivity : AppCompatActivity() {
                         isAllCaps = false
                         setOnClickListener {
                             isManualMode = true
+                            manualTrackTitle = track.trackName
+                            manualArtistName = track.artistName
+                            lastManualIndex = -1
+                            lastScrolledIndex = -1
                             
                             val rawText = track.syncedLyrics ?: track.plainLyrics ?: ""
                             
-                            tvTrack.text = "${track.trackName}\n${track.artistName}"
-                            tvTrack.visibility = View.VISIBLE
-                            tvSource.text = "LRCLIB (Manual)"
-                            tvSource.visibility = View.VISIBLE
+                            // この場でタイムスタンプ [mm:ss.F] をミリ秒(Long)に変換して、歌詞リストを構築するパース処理
+                            val parsedList = mutableListOf<Pair<Long, String>>()
+                            val timeRegex = Regex("\\[(\\d+):(\\d+)\\.(\\d+)\\]")
                             
-                            stopPlainScroll()
+                            rawText.lines().forEach { line ->
+                                val match = timeRegex.find(line)
+                                if (match != null) {
+                                    val min = match.groupValues[1].toLongOrNull() ?: 0L
+                                    val sec = match.groupValues[2].toLongOrNull() ?: 0L
+                                    val msStr = match.groupValues[3].padEnd(3, '0').take(3)
+                                    val ms = msStr.toLongOrNull() ?: 0L
+                                    val totalMs = (min * 60 * 1000) + (sec * 1000) + ms
+                                    
+                                    val textOnly = line.replace(timeRegex, "").trim()
+                                    parsedList.add(Pair(totalMs, textOnly))
+                                } else if (line.isNotBlank()) {
+                                    parsedList.add(Pair(0L, line.trim()))
+                                }
+                            }
                             
-                            // タイムスタンプが動くように、MediaTracker大元のデータ処理関数を安全に呼び出す
-                            mediaTracker.injectManualLyrics(
-                                title = track.trackName,
-                                artist = track.artistName,
-                                rawLyrics = rawText,
-                                isSynced = track.syncedLyrics != null
-                            )
+                            // タイムスタンプ順に綺麗にソート
+                            manualLines = parsedList.sortedBy { it.first }
                             
                             layoutSearchPanel.visibility = View.GONE
                         }
@@ -429,6 +465,59 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    // 手動検索モード専用のタイムスタンプ同期表示処理
+    private fun renderManualSyncedLyrics(currentPosMs: Long, colors: AlbumColors?) {
+        if (manualLines.isEmpty()) {
+            tvLyrics.text = "No lyrics text available."
+            return
+        }
+
+        // 現在の再生時間から、今何行目の歌詞であるかを判定
+        var currentIndex = 0
+        for (i in manualLines.indices) {
+            if (currentPosMs >= manualLines[i].first) {
+                currentIndex = i
+            } else {
+                break
+            }
+        }
+
+        val ssb = SpannableStringBuilder()
+        val highlightColor = colors?.vibrant ?: DEFAULT_HIGHLIGHT
+        val dimColor = colors?.textDim ?: DEFAULT_DIM
+
+        manualLines.forEachIndexed { i, pair ->
+            val isCurrentLine = i == currentIndex
+            val lineStart = ssb.length
+
+            if (isCurrentLine) {
+                ssb.append("▶  ${pair.second}")
+                ssb.setSpan(
+                    StyleSpan(Typeface.BOLD),
+                    lineStart, ssb.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            } else {
+                ssb.append("    ${pair.second}")
+                ssb.setSpan(
+                    ForegroundColorSpan(dimColor.toInt()),
+                    lineStart, ssb.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+            ssb.append("\n\n")
+        }
+
+        tvLyrics.text = ssb
+
+        if (currentIndex != lastScrolledIndex) {
+            lastScrolledIndex = currentIndex
+            if (!userScrolling) {
+                autoScrollToCurrentLine(currentIndex, manualLines.size)
+            }
+        }
+    }
+
     private fun updateAlbumArt(state: LyricsState) {
         val art = state.albumArt
         if (art != null) {
@@ -636,9 +725,26 @@ class MainActivity : AppCompatActivity() {
         btnJumpToCurrent.setOnClickListener {
             userScrolling = false
             btnJumpToCurrent.visibility = View.GONE
-            val currentIdx = mediaTracker.state.value.currentIndex
+            
+            val currentIdx = if (isManualMode) {
+                // 手動モードの場合は現在の再生時間から行数を逆算
+                val currentPos = try {
+                    val prop = mediaTracker.state.value.javaClass.getDeclaredField("currentPlaybackPositionMs")
+                    prop.isAccessible = true
+                    prop.get(mediaTracker.state.value) as Long
+                } catch (e: Exception) { 0L }
+                var idx = 0
+                for (i in manualLines.indices) {
+                    if (currentPos >= manualLines[i].first) idx = i else break
+                }
+                idx
+            } else {
+                mediaTracker.state.value.currentIndex
+            }
+            
+            val totalSize = if (isManualMode) manualLines.size else mediaTracker.state.value.lines.size
             if (currentIdx >= 0) {
-                autoScrollToCurrentLine(currentIdx, mediaTracker.state.value.lines.size)
+                autoScrollToCurrentLine(currentIdx, totalSize)
             }
         }
     }
