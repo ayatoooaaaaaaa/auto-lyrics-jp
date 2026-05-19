@@ -18,8 +18,10 @@ import android.annotation.SuppressLint
 import android.content.SharedPreferences
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.LinearInterpolator
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -35,7 +37,11 @@ import com.autolyrics.media.MediaTracker
 import com.autolyrics.model.AlbumColors
 import com.autolyrics.model.LyricsState
 import com.autolyrics.model.LyricsStatus
+import com.autolyrics.lyrics.LrcLibClient
+import com.autolyrics.lyrics.LyricsResponse
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -84,6 +90,12 @@ class MainActivity : AppCompatActivity() {
         userScrolling = false
         btnJumpToCurrent.visibility = View.GONE
     }
+
+    // 🔍 手動検索用の新しいUIパーツ
+    private lateinit var layoutSearchPanel: LinearLayout
+    private lateinit var etSearchQuery: EditText
+    private lateinit var btnSearchSubmit: Button
+    private lateinit var layoutSearchResults: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -135,6 +147,7 @@ class MainActivity : AppCompatActivity() {
         applyFontSettings()
 
         findViewById<ImageButton>(R.id.btn_settings_toggle).setOnClickListener {
+            layoutSearchPanel.visibility = View.GONE // 検索窓は閉じる
             fontSettingsPanel.visibility = if (fontSettingsPanel.visibility == View.VISIBLE)
                 View.GONE else View.VISIBLE
         }
@@ -204,7 +217,7 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.btn_aa_delay_reset).setOnClickListener {
             aaOffsetMs = 0L
-            prefs.edit().putLong("aa_offset_ms", 0L).apply()
+            prefs.edit().putLong("aa_offset_ms", aaOffsetMs).apply()
             updateAaDelayDisplay()
         }
 
@@ -229,6 +242,9 @@ class MainActivity : AppCompatActivity() {
             mediaTracker.adjustOffset(1000)
             showSyncStatus("Offset: ${formatOffset(mediaTracker.state.value.offsetMs)}")
         }
+
+        // 🔍 【改造】手動検索用UIの動的セットアップ
+        setupSearchUi()
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -275,7 +291,7 @@ class MainActivity : AppCompatActivity() {
                             tvLyrics.text = "Loading lyrics…"
                         }
                         LyricsStatus.NOT_FOUND -> {
-                            tvLyrics.text = "No lyrics found for this track."
+                            tvLyrics.text = "No lyrics found for this track.\n\n💡 Try using the manual search button at the top!"
                         }
                         LyricsStatus.ERROR -> {
                             tvLyrics.text = "Error loading lyrics.\nCheck your internet connection."
@@ -320,6 +336,123 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // 🔍 新しい手動検索UIを画面にプログラムでねじ込む関数
+    private fun setupSearchUi() {
+        // 設定ボタンのとなりに配置するための検索切り替えボタン
+        val btnSearchToggle = ImageButton(this).apply {
+            setImageResource(android.R.drawable.ic_search_category_default)
+            setBackgroundColor(Color.TRANSPARENT)
+            setPadding(16, 16, 16, 16)
+        }
+        
+        // 既存のボタンレイアウトに検索ボタンを合体させる
+        val btnSettingsToggle = findViewById<ImageButton>(R.id.btn_settings_toggle)
+        (btnSettingsToggle.parent as? LinearLayout)?.addView(btnSearchToggle, 0)
+
+        // 検索画面全体のパネル
+        layoutSearchPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            padding = 24
+            visibility = View.GONE
+            setBackgroundColor(Color.parseColor("#222233"))
+        }
+
+        val layoutInputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        etSearchQuery = EditText(this).apply {
+            hint = "Search Song or Artist (e.g. Kenshi Yonezu LADY)"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        btnSearchSubmit = Button(this).apply {
+            text = "SEARCH"
+        }
+
+        layoutInputRow.addView(etSearchQuery)
+        layoutInputRow.addView(btnSearchSubmit)
+        layoutSearchPanel.addView(layoutInputRow)
+
+        // 検索結果のリストを表示するスクロールエリア
+        val resultsScrollView = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_SIZE, 300)
+        }
+        layoutSearchResults = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        resultsScrollView.addView(layoutSearchResults)
+        layoutSearchPanel.addView(resultsScrollView)
+
+        // メイン画面のルートに追加
+        rootLayout.addView(layoutSearchPanel, rootLayout.indexOfChild(findViewById(R.id.scroll_lyrics)))
+
+        // 検索ボタンを押した時のトグル処理
+        btnSearchToggle.setOnClickListener {
+            fontSettingsPanel.visibility = View.GONE // フォント設定は閉じる
+            layoutSearchPanel.visibility = if (layoutSearchPanel.visibility == View.VISIBLE)
+                View.GONE else View.VISIBLE
+                
+            // 今流れている曲名をあらかじめ入力欄に入れてあげる優しさ
+            if (layoutSearchPanel.visibility == View.VISIBLE) {
+                val currentTrack = mediaTracker.state.value.track
+                if (currentTrack != null) {
+                    etSearchQuery.setText("${currentTrack.title} ${currentTrack.artist}")
+                }
+            }
+        }
+
+        // 検索実行処理
+        btnSearchSubmit.setOnClickListener {
+            val query = etSearchQuery.text.toString().trim()
+            if (query.isNotBlank()) {
+                executeLyricsSearch(query)
+            }
+        }
+    }
+
+    // 🌐 LRCLIBに手動で複数候補をリクエストする関数
+    private fun executeLyricsSearch(query: String) {
+        layoutSearchResults.removeAllViews()
+        val tvLoading = TextView(this).apply { 
+            text = "Searching..."
+            setTextColor(Color.WHITE)
+        }
+        layoutSearchResults.addView(tvLoading)
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val results = LrcLibClient.searchLyrics(query)
+            withContext(Dispatchers.Main) {
+                layoutSearchResults.removeAllViews()
+                if (results.isEmpty()) {
+                    val tvNoResult = TextView(this@MainActivity).apply { 
+                        text = "No tracks found on LRCLIB."
+                        setTextColor(Color.RED)
+                    }
+                    layoutSearchResults.addView(tvNoResult)
+                    return@withContext
+                }
+
+                // 見つかった候補をボタンとして一覧表示
+                results.forEach { track ->
+                    val hasSynced = if (track.syncedLyrics != null) " [Synced ✨]" else " [Plain]"
+                    val btnTrackOpt = Button(this@MainActivity).apply {
+                        text = "${track.trackName} - ${track.artistName}$hasSynced"
+                        isAllCaps = false
+                        setOnClickListener {
+                            // タップされた曲のタイムスタンプデータをアプリに強制ロードする！
+                            mediaTracker.injectManualLyrics(track.syncedLyrics, track.plainLyrics, track.trackName, track.artistName)
+                            layoutSearchPanel.visibility = View.GONE // パネルを閉じる
+                        }
+                    }
+                    layoutSearchResults.addView(btnTrackOpt)
+                }
+            }
+        }
+    }
+
     private fun updateAlbumArt(state: LyricsState) {
         val art = state.albumArt
         if (art != null) {
@@ -346,386 +479,4 @@ class MainActivity : AppCompatActivity() {
             delayBar.setBackgroundColor(lighten(colors.dominantDark, 1.2f))
             divider.setBackgroundColor(lighten(colors.dominant, 1.8f))
 
-            tvAppTitle.setTextColor(colors.textPrimary)
-            tvAppSubtitle.setTextColor(colors.textDim)
-            tvTrack.setTextColor(colors.vibrant)
-            tvLyrics.setTextColor(colors.textPrimary)
-        } else {
-            rootLayout.setBackgroundColor(DEFAULT_BG)
-            appBar.setBackgroundColor(DEFAULT_APP_BAR)
-            delayBar.setBackgroundColor(DEFAULT_DELAY_BAR)
-            divider.setBackgroundColor(DEFAULT_DIVIDER)
-
-            tvAppTitle.setTextColor(Color.parseColor("#E0E0FF"))
-            tvAppSubtitle.setTextColor(Color.parseColor("#8888AA"))
-            tvTrack.setTextColor(Color.parseColor("#BB86FC"))
-            tvLyrics.setTextColor(Color.parseColor("#CCCCDD"))
-        }
-    }
-
-    private fun lighten(color: Int, factor: Float): Int {
-        val r = (Color.red(color) * factor).toInt().coerceIn(0, 255)
-        val g = (Color.green(color) * factor).toInt().coerceIn(0, 255)
-        val b = (Color.blue(color) * factor).toInt().coerceIn(0, 255)
-        return Color.rgb(r, g, b)
-    }
-
-    private fun updateDelayDisplay(offsetMs: Long) {
-        val sign = when {
-            offsetMs > 0 -> "+"
-            else -> ""
-        }
-        tvDelay.text = "Phone Sync: ${sign}${offsetMs}ms"
-    }
-
-    private fun renderSyncedLyrics(state: LyricsState) {
-        val ssb = SpannableStringBuilder()
-        val hasKaraoke = state.lines.any { it.words.isNotEmpty() }
-        val colors = state.albumColors
-        val highlightColor = colors?.vibrant ?: DEFAULT_HIGHLIGHT
-        val highlightBg = setAlpha(highlightColor, 0.2f)
-        val dimColor = colors?.textDim ?: DEFAULT_DIM
-
-        state.lines.forEachIndexed { i, line ->
-            val isCurrentLine = i == state.currentIndex
-            val lineStart = ssb.length
-
-            if (isCurrentLine) {
-                ssb.append("▶  ")
-            } else {
-                ssb.append("    ")
-            }
-
-            if (isCurrentLine && hasKaraoke && line.words.isNotEmpty()) {
-                line.words.forEachIndexed { wi, word ->
-                    val wordStart = ssb.length
-                    ssb.append(word.text)
-                    val wordEnd = ssb.length
-
-                    if (wi == state.currentWordIndex) {
-                        ssb.setSpan(
-                            StyleSpan(Typeface.BOLD),
-                            wordStart, wordEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                        ssb.setSpan(
-                            ForegroundColorSpan(highlightColor),
-                            wordStart, wordEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                        ssb.setSpan(
-                            BackgroundColorSpan(highlightBg),
-                            wordStart, wordEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                        )
-                    }
-
-                    if (wi < line.words.size - 1) ssb.append(" ")
-                }
-                ssb.setSpan(
-                    StyleSpan(Typeface.BOLD),
-                    lineStart, ssb.length,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                )
-            } else {
-                ssb.append(line.text)
-                if (isCurrentLine) {
-                    ssb.setSpan(
-                        StyleSpan(Typeface.BOLD),
-                        lineStart, ssb.length,
-                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                    )
-                }
-            }
-
-            if (!isCurrentLine) {
-                ssb.setSpan(
-                    ForegroundColorSpan(dimColor),
-                    lineStart, ssb.length,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                )
-            }
-
-            val translatedLine = state.translatedLines?.getOrNull(i)
-            if (!translatedLine.isNullOrBlank()) {
-                ssb.append("\n")
-                val tlStart = ssb.length
-                ssb.append("    $translatedLine")
-                ssb.setSpan(
-                    RelativeSizeSpan(0.8f),
-                    tlStart, ssb.length,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                )
-                ssb.setSpan(
-                    ForegroundColorSpan(dimColor),
-                    tlStart, ssb.length,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                )
-            }
-
-            ssb.append("\n\n")
-        }
-
-        tvLyrics.text = ssb
-
-        if (state.currentIndex != lastScrolledIndex && state.currentIndex >= 0) {
-            lastScrolledIndex = state.currentIndex
-            if (!userScrolling) {
-                autoScrollToCurrentLine(state.currentIndex, state.lines.size)
-            }
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        updatePermissionUi()
-    }
-
-    override fun onDestroy() {
-        stopPlainScroll()
-        super.onDestroy()
-    }
-
-    private fun updatePermissionUi() {
-        val enabled = isNotificationListenerEnabled()
-        if (enabled) {
-            tvStatus.visibility = View.GONE
-            btnPermission.visibility = View.GONE
-        } else {
-            tvStatus.text = "⚠  Notification access required"
-            tvStatus.setBackgroundResource(R.drawable.bg_status_warn)
-            tvStatus.visibility = View.VISIBLE
-            btnPermission.visibility = View.VISIBLE
-        }
-    }
-
-    private fun isNotificationListenerEnabled(): Boolean {
-        val flat = Settings.Secure.getString(
-            contentResolver,
-            "enabled_notification_listeners"
-        )
-        val component = ComponentName(this, MediaListenerService::class.java)
-        return flat?.contains(component.flattenToString()) == true
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun setupScrollDetection() {
-        scrollView.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    userTouching = true
-                    handler.removeCallbacks(scrollResetRunnable)
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    userTouching = false
-                    if (userScrolling) {
-                        handler.removeCallbacks(scrollResetRunnable)
-                        handler.postDelayed(scrollResetRunnable, 8000)
-                    }
-                }
-            }
-            false
-        }
-
-        scrollView.setOnScrollChangeListener { _, _, _, _, _ ->
-            if (userTouching && !userScrolling) {
-                userScrolling = true
-                btnJumpToCurrent.visibility = View.VISIBLE
-            }
-        }
-
-        btnJumpToCurrent.setOnClickListener {
-            userScrolling = false
-            btnJumpToCurrent.visibility = View.GONE
-            handler.removeCallbacks(scrollResetRunnable)
-            val state = mediaTracker.state.value
-            if (state.currentIndex >= 0) {
-                lastScrolledIndex = state.currentIndex
-                autoScrollToCurrentLine(state.currentIndex, state.lines.size)
-            }
-        }
-    }
-
-    private fun autoScrollToCurrentLine(currentIndex: Int, totalLines: Int) {
-        if (totalLines == 0) return
-        scrollView.post {
-            val targetY = (currentIndex.toFloat() / totalLines * tvLyrics.height).toInt()
-            val offset = scrollView.height / 3
-            scrollView.smoothScrollTo(0, maxOf(0, targetY - offset))
-        }
-    }
-
-    private fun updateAaDelayDisplay() {
-        val sign = if (aaOffsetMs > 0) "+" else ""
-        tvAaDelay.text = "${sign}${aaOffsetMs}ms"
-    }
-
-    private fun selectFont(family: String) {
-        lyricsFontFamily = family
-        saveFontSettings()
-        applyFontSettings()
-        updateFontButtonHighlights()
-    }
-
-    private fun saveFontSettings() {
-        prefs.edit()
-            .putInt("lyrics_font_size", lyricsFontSizeSp)
-            .putString("lyrics_font_family", lyricsFontFamily)
-            .apply()
-    }
-
-    private fun applyFontSettings() {
-        tvLyrics.textSize = lyricsFontSizeSp.toFloat()
-        tvLyrics.typeface = Typeface.create(lyricsFontFamily, Typeface.NORMAL)
-        tvFontSize.text = "${lyricsFontSizeSp}sp"
-    }
-
-    private fun updateFontButtonHighlights() {
-        val selectedTint = Color.parseColor("#3A3A5E")
-        val normalTint = Color.parseColor("#2A2A3E")
-        fontButtons.forEach { (family, button) ->
-            button.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                if (family == lyricsFontFamily) selectedTint else normalTint
-            )
-        }
-    }
-
-    private fun onTapSyncPressed() {
-        val state = mediaTracker.state.value
-        if (state.status != LyricsStatus.FOUND || !state.isPlaying) {
-            showSyncStatus("Play a synced song first")
-            return
-        }
-
-        if (!tapSyncActive) {
-            tapSyncActive = true
-            tapSyncOffsets.clear()
-            val nextIdx = (state.currentIndex + 1).coerceAtMost(state.lines.size - 1)
-            tapSyncTargetLineIndex = nextIdx
-            setTapSyncActiveStyle(true)
-            btnTapSync.text = "⏎  TAP when you hear it (1/3)"
-            val lineText = state.lines.getOrNull(nextIdx)?.text?.take(60) ?: "…"
-            showSyncStatus("Listen for:\n\"$lineText\"")
-        } else {
-            val targetLine = state.lines.getOrNull(tapSyncTargetLineIndex)
-            if (targetLine != null && targetLine.timeMs > 0) {
-                val rawPos = getCurrentRawPositionMs()
-                val offset = rawPos - targetLine.timeMs
-                tapSyncOffsets.add(offset)
-            }
-
-            if (tapSyncOffsets.size >= 3) {
-                val avgOffset = tapSyncOffsets.average().toLong()
-                mediaTracker.setOffset(avgOffset)
-                showSyncStatus("Synced! Offset: ${formatOffset(avgOffset)}")
-                tapSyncActive = false
-                setTapSyncActiveStyle(false)
-                btnTapSync.text = "Tap to Sync"
-            } else {
-                tapSyncTargetLineIndex = (tapSyncTargetLineIndex + 1).coerceAtMost(state.lines.size - 1)
-                btnTapSync.text = "⏎  TAP when you hear it (${tapSyncOffsets.size + 1}/3)"
-                val lineText = state.lines.getOrNull(tapSyncTargetLineIndex)?.text?.take(60) ?: "…"
-                showSyncStatus("Listen for:\n\"$lineText\"")
-            }
-        }
-    }
-
-    private fun setTapSyncActiveStyle(active: Boolean) {
-        if (active) {
-            btnTapSync.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                Color.parseColor("#4A2A6E")
-            )
-            btnTapSync.setTextColor(Color.parseColor("#EEDDFF"))
-        } else {
-            btnTapSync.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                Color.parseColor("#2A2A3E")
-            )
-            btnTapSync.setTextColor(Color.parseColor("#CCCCDD"))
-        }
-    }
-
-    private fun getCurrentRawPositionMs(): Long {
-        return try {
-            mediaTracker.getCurrentPositionMs() - mediaTracker.state.value.offsetMs
-        } catch (_: Exception) { 0L }
-    }
-
-    private val hideSyncStatusRunnable = Runnable {
-        if (!tapSyncActive) {
-            tvSyncStatus.visibility = View.GONE
-        }
-    }
-
-    private fun showSyncStatus(text: String) {
-        tvSyncStatus.text = text
-        tvSyncStatus.visibility = View.VISIBLE
-        handler.removeCallbacks(hideSyncStatusRunnable)
-        handler.postDelayed(hideSyncStatusRunnable, 8000)
-    }
-
-    private fun formatOffset(ms: Long): String {
-        val sign = if (ms >= 0) "+" else ""
-        return "${sign}${ms}ms"
-    }
-
-    private fun startPlainScroll(state: LyricsState) {
-        val durationMs = state.track?.durationMs ?: 0
-        if (durationMs <= 0 || state.lines.isEmpty()) {
-            scrollView.scrollTo(0, 0)
-            return
-        }
-
-        val trackTitle = state.track?.title
-        val isNewTrack = trackTitle != lastPlainTrackTitle
-        lastPlainTrackTitle = trackTitle
-
-        tvLyrics.post {
-            val maxScroll = tvLyrics.height - scrollView.height
-            if (maxScroll <= 0) return@post
-
-            val posMs = try {
-                mediaTracker.getCurrentPositionMs().coerceAtLeast(0)
-            } catch (_: Exception) { 0L }
-            val remainingMs = (durationMs - posMs).coerceAtLeast(0)
-            val startFraction = posMs.toFloat() / durationMs
-            val startScrollY = (startFraction * maxScroll).toInt().coerceIn(0, maxScroll)
-
-            if (isNewTrack || !userScrolling) {
-                scrollView.scrollTo(0, startScrollY)
-            }
-
-            plainScrollAnimator?.cancel()
-            plainScrollAnimator = ValueAnimator.ofInt(startScrollY, maxScroll).apply {
-                duration = remainingMs
-                interpolator = LinearInterpolator()
-                addUpdateListener { anim ->
-                    if (!userScrolling) {
-                        scrollView.scrollTo(0, anim.animatedValue as Int)
-                    }
-                }
-                start()
-                if (!state.isPlaying) pause()
-            }
-        }
-    }
-
-    private fun stopPlainScroll() {
-        plainScrollAnimator?.cancel()
-        plainScrollAnimator = null
-        lastPlainTrackTitle = null
-    }
-
-    companion object {
-        private val DEFAULT_BG = Color.parseColor("#121212")
-        private val DEFAULT_APP_BAR = Color.parseColor("#1E1E2E")
-        private val DEFAULT_DELAY_BAR = Color.parseColor("#1A1A2A")
-        private val DEFAULT_DIVIDER = Color.parseColor("#2A2A3A")
-        private val DEFAULT_HIGHLIGHT = Color.parseColor("#FFD54F")
-        private val DEFAULT_DIM = Color.parseColor("#99FFFFFF")
-
-        private fun setAlpha(color: Int, alpha: Float): Int {
-            val a = (alpha * 255).toInt().coerceIn(0, 255)
-            return Color.argb(a, Color.red(color), Color.green(color), Color.blue(color))
-        }
-    }
-}
+    
