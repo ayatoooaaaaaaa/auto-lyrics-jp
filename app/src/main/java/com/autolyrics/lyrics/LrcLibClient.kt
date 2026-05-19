@@ -17,16 +17,30 @@ object LrcLibClient {
 
     private val gson = Gson()
 
-    // 🌐 100%確実に存在する、元の本物の歌詞APIサーバー（LRCLIB）
+    // 🌐 元々の本物の歌詞APIサーバー
     private const val BASE_URL = "https://lrclib.net/"
 
-    fun getLyrics(trackName: String, artistName: String, duration: Int): LyricsResponse? {
+    /**
+     * MediaTracker.kt からどう呼び出されてもエラーにしないための関数
+     * 全ての引数（albumName や durationSec）にデフォルト値 or 予備の設定を持たせて、チグハグを完全に防ぐ！
+     */
+    fun getLyrics(
+        trackName: String, 
+        artistName: String, 
+        duration: Int = 0,               // durationが来たらこれ
+        albumName: String? = null,       // albumNameが来てもエラーにしない
+        durationSec: Int? = null         // durationSecが来てもエラーにしない
+    ): LyricsResponse? {
+
+        // もし durationSec が送られてきたら、それを最優先で duration として使う
+        val finalDuration = durationSec ?: duration
+
         val url = BASE_URL.toHttpUrl().newBuilder()
             .addPathSegment("api")
             .addPathSegment("lyrics")
             .addQueryParameter("trackName", trackName)
             .addQueryParameter("artistName", artistName)
-            .addQueryParameter("duration", duration.toString())
+            .addQueryParameter("duration", finalDuration.toString())
             .build()
 
         val request = Request.Builder()
