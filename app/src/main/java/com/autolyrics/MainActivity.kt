@@ -304,7 +304,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupSearchUi() {
         val btnSearchToggle = ImageButton(this).apply {
             setImageResource(android.R.drawable.ic_search_category_default)
-            setBackgroundColor(Color.TRANSPARETransparent)
+            setBackgroundColor(Color.TRANSPARENT)
             setPadding(16, 16, 16, 16)
         }
         
@@ -709,4 +709,3 @@ class MainActivity : AppCompatActivity() {
         private val DEFAULT_DIM = Color.parseColor("#888888")
     }
 }
-
