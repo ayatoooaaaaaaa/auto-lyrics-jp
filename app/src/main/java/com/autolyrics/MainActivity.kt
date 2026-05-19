@@ -483,3 +483,233 @@ class MainActivity : AppCompatActivity() {
                 ssb.append("▶  ")
             } else {
                 ssb.append(
+                                if (isCurrentLine && hasKaraoke && line.words.isNotEmpty()) {
+                line.words.forEachIndexed { wi, word ->
+                    val wordStart = ssb.length
+                    ssb.append(word.text)
+                    val wordEnd = ssb.length
+
+                    if (wi == state.currentWordIndex) {
+                        ssb.setSpan(
+                            StyleSpan(Typeface.BOLD),
+                            wordStart, wordEnd,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                        ssb.setSpan(
+                            ForegroundColorSpan(highlightColor.toInt()),
+                            wordStart, wordEnd,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                        ssb.setSpan(
+                            BackgroundColorSpan(highlightBg.toInt()),
+                            wordStart, wordEnd,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                    }
+
+                    if (wi < line.words.size - 1) ssb.append(" ")
+                }
+                ssb.setSpan(
+                    StyleSpan(Typeface.BOLD),
+                    lineStart, ssb.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            } else {
+                ssb.append(line.text)
+                if (isCurrentLine) {
+                    ssb.setSpan(
+                        StyleSpan(Typeface.BOLD),
+                        lineStart, ssb.length,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+            }
+
+            if (!isCurrentLine) {
+                ssb.setSpan(
+                    ForegroundColorSpan(dimColor.toInt()),
+                    lineStart, ssb.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+
+            val translatedLine = state.translatedLines?.getOrNull(i)
+            if (!translatedLine.isNullOrBlank()) {
+                ssb.append("\n")
+                val tlStart = ssb.length
+                ssb.append("    $translatedLine")
+                ssb.setSpan(
+                    RelativeSizeSpan(0.8f),
+                    tlStart, ssb.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                ssb.setSpan(
+                    ForegroundColorSpan(dimColor.toInt()),
+                    tlStart, ssb.length,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+            }
+
+            ssb.append("\n\n")
+        }
+
+        tvLyrics.text = ssb
+
+        if (state.currentIndex != lastScrolledIndex && state.currentIndex >= 0) {
+            lastScrolledIndex = state.currentIndex
+            if (!userScrolling) {
+                autoScrollToCurrentLine(state.currentIndex, state.lines.size)
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updatePermissionUi()
+    }
+
+    override fun onDestroy() {
+        stopPlainScroll()
+        super.onDestroy()
+    }
+
+    private fun updatePermissionUi() {
+        val enabled = isNotificationListenerEnabled()
+        if (enabled) {
+            tvStatus.visibility = View.GONE
+            btnPermission.visibility = View.GONE
+        } else {
+            tvStatus.text = "⚠  Notification access required"
+            btnPermission.visibility = View.VISIBLE
+        }
+    }
+
+    private fun isNotificationListenerEnabled(): Boolean {
+        val cn = ComponentName(this, MediaListenerService::class.java)
+        val flat = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+        return flat != null && flat.contains(cn.flattenToString())
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupScrollDetection() {
+        scrollView.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> userTouching = true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    userTouching = false
+                    handler.removeCallbacks(scrollResetRunnable)
+                    handler.postDelayed(scrollResetRunnable, 4000)
+                }
+            }
+            false
+        }
+        scrollView.setOnScrollChangeListener { _, _, _, _, _ ->
+            if (userTouching) {
+                userScrolling = true
+                btnJumpToCurrent.visibility = View.VISIBLE
+            }
+        }
+        btnJumpToCurrent.setOnClickListener {
+            userScrolling = false
+            btnJumpToCurrent.visibility = View.GONE
+            val currentIdx = mediaTracker.state.value.currentIndex
+            if (currentIdx >= 0) {
+                autoScrollToCurrentLine(currentIdx, mediaTracker.state.value.lines.size)
+            }
+        }
+    }
+
+    private fun applyFontSettings() {
+        tvLyrics.textSize = lyricsFontSizeSp.toFloat()
+        tvFontSize.text = "$lyricsFontSizeSp sp"
+        try {
+            tvLyrics.typeface = Typeface.create(lyricsFontFamily, Typeface.NORMAL)
+        } catch (e: Exception) {
+            tvLyrics.typeface = Typeface.DEFAULT
+        }
+        updateFontButtonHighlights()
+    }
+
+    private fun saveFontSettings() {
+        prefs.edit()
+            .putInt("lyrics_font_size", lyricsFontSizeSp)
+            .putString("lyrics_font_family", lyricsFontFamily)
+            .apply()
+    }
+
+    private fun selectFont(family: String) {
+        lyricsFontFamily = family
+        saveFontSettings()
+        applyFontSettings()
+    }
+
+    private fun updateFontButtonHighlights() {
+        fontButtons.forEach { (family, button) ->
+            if (family == lyricsFontFamily) {
+                button.setBackgroundColor(Color.parseColor("#444466"))
+            } else {
+                button.setBackgroundColor(Color.parseColor("#222222"))
+            }
+        }
+    }
+
+    private fun updateAaDelayDisplay() {
+        val sign = if (aaOffsetMs > 0) "+" else ""
+        tvAaDelay.text = "AA Sync: $sign${aaOffsetMs}ms"
+    }
+
+    private fun startPlainScroll(state: LyricsState) {
+        if (lastPlainTrackTitle == state.track?.title) return
+        lastPlainTrackTitle = state.track?.title
+        
+        scrollView.post {
+            val totalScroll = tvLyrics.height - scrollView.height
+            if (totalScroll <= 0) return@post
+            
+            val duration = state.track?.durationMs ?: 180000L
+            plainScrollAnimator = ValueAnimator.ofInt(0, totalScroll).apply {
+                this.duration = duration
+                interpolator = LinearInterpolator()
+                addUpdateListener { animation ->
+                    scrollView.scrollTo(0, animation.animatedValue as Int)
+                }
+                start()
+            }
+        }
+    }
+
+    private fun stopPlainScroll() {
+        plainScrollAnimator?.cancel()
+        plainScrollAnimator = null
+        lastPlainTrackTitle = null
+    }
+
+    private fun autoScrollToCurrentLine(index: Int, totalLines: Int) {
+        if (index < 0 || totalLines == 0) return
+        scrollView.post {
+            val layout = tvLyrics.layout ?: return@post
+            val lineCount = layout.lineCount
+            val linesPerLyricsLine = lineCount / totalLines
+            if (linesPerLyricsLine <= 0) return@post
+            
+            val targetLine = index * linesPerLyricsLine
+            val y = layout.getLineTop(targetLine.coerceIn(0, lineCount - 1))
+            scrollView.smoothScrollTo(0, (y - scrollView.height / 3).coerceAtLeast(0))
+        }
+    }
+
+    private fun setAlpha(color: Int, alpha: Float): Int {
+        val a = (alpha * 255).toInt().coerceIn(0, 255)
+        return Color.argb(a, Color.red(color), Color.green(color), Color.blue(color))
+    }
+
+    companion object {
+        private val DEFAULT_BG = Color.parseColor("#121212")
+        private val DEFAULT_APP_BAR = Color.parseColor("#1F1F1F")
+        private val DEFAULT_DELAY_BAR = Color.parseColor("#1A1A1A")
+        private val DEFAULT_DIVIDER = Color.parseColor("#2C2C2C")
+        private val DEFAULT_HIGHLIGHT = Color.parseColor("#BB86FC")
+        private val DEFAULT_DIM = Color.parseColor("#888888")
+    }
+}
+
