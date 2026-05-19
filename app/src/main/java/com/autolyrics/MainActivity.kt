@@ -214,7 +214,7 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.btn_aa_delay_reset).setOnClickListener {
             aaOffsetMs = 0L
-            prefs.edit().putLong("aa_offset_ms", aaOffsetMs).apply()
+            prefs.edit().putLong("aa_offset_ms", 0L).apply()
             updateAaDelayDisplay()
         }
 
@@ -509,7 +509,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 歌詞をタップした行へ再生時間をシーク(反映)させる設定
+    // 安全にシーク（ジャンプ）処理を行うためのコントローラー取得と実行ロジック
     @SuppressLint("ClickableViewAccessibility")
     private fun setupLyricsTapListener() {
         tvLyrics.setOnTouchListener { v, event ->
@@ -533,8 +533,15 @@ class MainActivity : AppCompatActivity() {
                                 mediaTracker.state.value.lines.getOrNull(clickedLyricsIndex)?.timeMs ?: 0L
                             }
                             
-                            // 曲の再生位置を強制変更（シーク処理を呼び出す）
-                            mediaTracker.seekTo(targetMs)
+                            // MediaTracker内部のactiveControllerフィールドから安全にシークコマンドを発行する
+                            try {
+                                val controllerField = mediaTracker.javaClass.getDeclaredField("activeController")
+                                controllerField.isAccessible = true
+                                val controller = controllerField.get(mediaTracker) as? android.media.session.MediaController
+                                controller?.transportControls?.seekTo(targetMs)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
                         }
                     }
                 }
@@ -866,4 +873,3 @@ class MainActivity : AppCompatActivity() {
         private val DEFAULT_DIM = Color.parseColor("#888888")
     }
 }
-
