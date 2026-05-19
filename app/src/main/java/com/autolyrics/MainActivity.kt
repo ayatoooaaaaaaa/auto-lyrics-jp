@@ -68,7 +68,7 @@ class MediaTracker private constructor(private val context: Context) {
                     break
                 }
             }
-            if (newIdx famine >= 0) {
+            if (newIdx >= 0) {
                 val line = current.lines[newIdx]
                 if (line.words.isNotEmpty()) {
                     for (wi in line.words.indices) {
@@ -109,7 +109,6 @@ class MediaTracker private constructor(private val context: Context) {
         val current = _state.value
         
         if (!syncedLyrics.isNullOrBlank()) {
-            // 元のアプリが持っている本物のLyricsParserを使って時間付き歌詞をパース
             val parsedLines = LyricsParser.parse(syncedLyrics)
             _state.value = current.copy(
                 status = LyricsStatus.FOUND,
