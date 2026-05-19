@@ -215,10 +215,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 mediaTracker.state.collect { state ->
-                    if (isManualMode) {
-                        return@collect
-                    }
-                    
+                    // 手動モードであっても、再生位置の同期処理（renderSyncedLyrics）へ流すためにブロックはしない
                     updatePermissionUi()
                     updateDelayDisplay(state.offsetMs)
                     updateAlbumArt(state)
@@ -230,8 +227,10 @@ class MainActivity : AppCompatActivity() {
                         tvTrack.text = "${state.track.title}\n$artistText"
                         tvTrack.visibility = View.VISIBLE
                     } else {
-                        tvTrack.text = ""
-                        tvTrack.visibility = View.GONE
+                        if (!isManualMode) {
+                            tvTrack.text = ""
+                            tvTrack.visibility = View.GONE
+                        }
                     }
 
                     if (state.source.isNotBlank()) {
@@ -241,7 +240,7 @@ class MainActivity : AppCompatActivity() {
                         tvSource.text = srcText
                         tvSource.visibility = View.VISIBLE
                     } else {
-                        tvSource.visibility = View.GONE
+                        if (!isManualMode) tvSource.visibility = View.GONE
                     }
 
                     if (state.status != LyricsStatus.PLAIN_ONLY) {
@@ -255,16 +254,16 @@ class MainActivity : AppCompatActivity() {
 
                     when (state.status) {
                         LyricsStatus.NO_MEDIA -> {
-                            tvLyrics.text = "Play a song to see lyrics here.\n\nLyrics will also appear on Android Auto."
+                            if (!isManualMode) tvLyrics.text = "Play a song to see lyrics here.\n\nLyrics will also appear on Android Auto."
                         }
                         LyricsStatus.LOADING -> {
-                            tvLyrics.text = "Loading lyrics…"
+                            if (!isManualMode) tvLyrics.text = "Loading lyrics…"
                         }
                         LyricsStatus.NOT_FOUND -> {
-                            tvLyrics.text = "No lyrics found for this track.\n\n💡 Try using the manual search button at the top!"
+                            if (!isManualMode) tvLyrics.text = "No lyrics found for this track.\n\n💡 Try using the manual search button at the top!"
                         }
                         LyricsStatus.ERROR -> {
-                            tvLyrics.text = "Error loading lyrics.\nCheck your internet connection."
+                            if (!isManualMode) tvLyrics.text = "Error loading lyrics.\nCheck your internet connection."
                         }
                         LyricsStatus.FOUND -> {
                             renderSyncedLyrics(state)
@@ -407,11 +406,6 @@ class MainActivity : AppCompatActivity() {
                             
                             val rawText = track.syncedLyrics ?: track.plainLyrics ?: ""
                             
-                            // 外部クラスを一切使わず、ただのStringのリストとしてタイムタグを除去する最強に安全な処理
-                            val cleanedLines = rawText.lines().map { line ->
-                                line.replace(Regex("\\[\\d+:\\d+\\.\\d+\\]"), "").trim()
-                            }.filter { it.isNotBlank() }
-                            
                             tvTrack.text = "${track.trackName}\n${track.artistName}"
                             tvTrack.visibility = View.VISIBLE
                             tvSource.text = "LRCLIB (Manual)"
@@ -419,13 +413,13 @@ class MainActivity : AppCompatActivity() {
                             
                             stopPlainScroll()
                             
-                            // 画面のTextViewに直接テキストを流し込む
-                            val sb = SpannableStringBuilder()
-                            sb.append("ℹ  Manual Lyrics Mode\n\n─────────────────────\n\n")
-                            cleanedLines.forEach { lineText ->
-                                sb.append("$lineText\n\n")
-                            }
-                            tvLyrics.text = sb
+                            // タイムスタンプが動くように、MediaTracker大元のデータ処理関数を安全に呼び出す
+                            mediaTracker.injectManualLyrics(
+                                title = track.trackName,
+                                artist = track.artistName,
+                                rawLyrics = rawText,
+                                isSynced = track.syncedLyrics != null
+                            )
                             
                             layoutSearchPanel.visibility = View.GONE
                         }
@@ -441,8 +435,10 @@ class MainActivity : AppCompatActivity() {
             ivAlbumArt.setImageBitmap(art)
             ivAlbumArt.visibility = View.VISIBLE
         } else {
-            ivAlbumArt.setImageDrawable(null)
-            ivAlbumArt.visibility = View.GONE
+            if (!isManualMode) {
+                ivAlbumArt.setImageDrawable(null)
+                ivAlbumArt.visibility = View.GONE
+            }
         }
     }
 
