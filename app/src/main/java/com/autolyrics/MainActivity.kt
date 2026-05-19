@@ -77,6 +77,7 @@ class MainActivity : AppCompatActivity() {
 
     private var plainScrollAnimator: ValueAnimator? = null
     private var lastPlainTrackTitle: String? = null
+    private var isManualMode = false
 
     private val fontButtons = mutableMapOf<String, Button>()
     private val scrollResetRunnable = Runnable {
@@ -206,7 +207,7 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.btn_aa_delay_reset).setOnClickListener {
             aaOffsetMs = 0L
-            prefs.edit().putLong("aa_offset_ms", 0L).apply()
+            prefs.edit().putLong("aa_offset_ms", aaOffsetMs).apply()
             updateAaDelayDisplay()
         }
 
@@ -214,6 +215,11 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 mediaTracker.state.collect { state ->
+                    if (isManualMode) {
+                        // 手動選択モードの時は自動更新で画面が引き戻されるのを完全にブロックする
+                        return@collect
+                    }
+                    
                     updatePermissionUi()
                     updateDelayDisplay(state.offsetMs)
                     updateAlbumArt(state)
@@ -354,9 +360,12 @@ class MainActivity : AppCompatActivity() {
                 View.GONE else View.VISIBLE
                 
             if (layoutSearchPanel.visibility == View.VISIBLE) {
-                val currentTrack = mediaTracker.state.value.track
-                if (currentTrack != null) {
-                    etSearchQuery.setText("${currentTrack.title} ${currentTrack.artist}")
+                // 自動入力で文字がバグるのを完全に防止。空なら現在のトラック情報を1回だけ入れる
+                if (etSearchQuery.text.toString().isBlank()) {
+                    val currentTrack = mediaTracker.state.value.track
+                    if (currentTrack != null) {
+                        etSearchQuery.setText("${currentTrack.title} ${currentTrack.artist}")
+                    }
                 }
             }
         }
@@ -396,16 +405,33 @@ class MainActivity : AppCompatActivity() {
                         text = "${track.trackName} - ${track.artistName}$hasSynced"
                         isAllCaps = false
                         setOnClickListener {
-                            // MediaTrackerを介さず、このActivityのスコープ内で直接Service経由、または通知インテントを飛ばして歌詞を更新する
-                            val intent = Intent("com.autolyrics.ACTION_MANUAL_LYRICS").apply {
-                                setPackage(packageName)
-                                putExtra("track_id", track.id)
-                                putExtra("track_name", track.trackName)
-                                putExtra("artist_name", track.artistName)
-                                putExtra("synced_lyrics", track.syncedLyrics)
-                                putExtra("plain_lyrics", track.plainLyrics)
+                            // 手動ホールドモードをONにする
+                            isManualMode = true
+                            
+                            val textToParse = track.syncedLyrics ?: track.plainLyrics ?: ""
+                            val linesList = com.autolyrics.lyrics.LyricsParser.parse(textToParse)
+                            val isSyncedType = track.syncedLyrics != null
+                            
+                            tvTrack.text = "${track.trackName}\n${track.artistName}"
+                            tvTrack.visibility = View.VISIBLE
+                            tvSource.text = "LRCLIB (Manual)"
+                            tvSource.visibility = View.VISIBLE
+                            
+                            val customState = mediaTracker.state.value.copy(
+                                status = if (isSyncedType) LyricsStatus.FOUND else LyricsStatus.PLAIN_ONLY,
+                                lines = linesList,
+                                currentIndex = if (isSyncedType) 0 else -1,
+                                currentWordIndex = -1
+                            )
+                            
+                            if (isSyncedType) {
+                                renderSyncedLyrics(customState)
+                            } else {
+                                stopPlainScroll()
+                                tvLyrics.text = track.plainLyrics ?: "No lyrics text available."
+                                startPlainScroll(customState)
                             }
-                            sendBroadcast(intent)
+                            
                             layoutSearchPanel.visibility = View.GONE
                         }
                     }
